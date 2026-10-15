@@ -1,0 +1,422 @@
+@page "/"
+@rendermode InteractiveServer
+@using CnesMapaSindicatos.Models
+@using CnesMapaSindicatos.Services
+@inject SindicatoService SindicatoService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="explorer-shell" style="display: flex; flex-direction: column; height: 100vh; overflow: hidden;">
+    @{
+        var sindicatosFiltrados = SindicatosFiltrados;
+    }
+    
+    <!-- TOPBAR -->
+    <header class="cnes-header">
+        <div class="header-brand" style="display: flex; align-items: center; gap: 12px;">
+            <span style="background: var(--accent-red); color: #fff; font-weight: 800; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem;">
+                CNES / MTE
+            </span>
+            <h1 style="font-size: 1.15rem; font-weight: 700; margin: 0;">
+                Explorador Nacional de Entidades Sindicais
+            </h1>
+        </div>
+
+        <div class="header-actions" style="display: flex; align-items: center; gap: 12px;">
+            @if (!string.IsNullOrEmpty(UfSelecionada))
+            {
+                <button class="btn-outline-red" @onclick="LimparEstado">
+                    UF: @UfSelecionada ✕
+                </button>
+            }
+
+        </div>
+    </header>
+
+    <!-- CONTEÚDO PRINCIPAL: MAPA (ESQUERDA) + BUSCA E FILTROS (DIREITA) -->
+    <main class="map-workspace" style="display: flex; flex: 1; overflow: hidden;">
+        
+        <!-- LADO ESQUERDO: MAPA -->
+        <section class="map-panel" style="flex: 6; position: relative; border-right: 1px solid var(--border-color);">
+            <div id="blazorMap" style="width: 100%; height: 100%;"></div>
+            <button class="btn-red map-theme-toggle"
+                    aria-label="Alternar tema"
+                    title="Alternar tema claro/escuro"
+                    @onclick="AlternarTema">
+                <span class="theme-icon" aria-hidden="true">@(ModoEscuro ? "☀" : "☾")</span>
+                <span class="theme-label">@(ModoEscuro ? "Modo claro" : "Modo escuro")</span>
+            </button>
+        </section>
+
+        <!-- LADO DIREITO: PAINEL DE FILTROS E LISTA -->
+        <aside class="results-panel" style="flex: 6; display: flex; flex-direction: column; background: var(--bg-secondary); overflow: hidden;">
+            <div class="mobile-results-toolbar">
+                <button class="btn-outline-red"
+                        aria-expanded="@FiltrosVisiveis.ToString().ToLowerInvariant()"
+                        @onclick="AlternarVisibilidadeFiltros">
+                    @(FiltrosVisiveis ? "Ocultar filtros" : "Mostrar filtros")
+                </button>
+                <span>Encontrados: <strong>@sindicatosFiltrados.Count</strong></span>
+            </div>
+            
+            <!-- ÁREA DE FILTROS DO MTE -->
+            <div class="filters-panel @(FiltrosVisiveis ? null : "filters-collapsed")" style="padding: 1rem; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.65rem;">
+                
+                <!-- Busca por Texto -->
+                <input type="text"
+                       class="input-control"
+                       placeholder="Buscar em todos os dados: nome, CNPJ, endereço, contatos, filiação..."
+                       @bind="TermoBusca"
+                       @bind:event="oninput" />
+
+                <!-- Linha 1 de Filtros: UF, Grau, Área Geoeconômica -->
+                <div class="filter-grid-primary" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;">
+                    <SearchableSelect Options="@UfsDisponiveis" Value="@UfSelecionada" ValueChanged="@OnUfDropdownChanged" Placeholder="UF (Todas)" />
+                    <SearchableSelect Options="@GrausDisponiveis" @bind-Value="GrauSelecionado" Placeholder="Grau (Todos)" />
+                    <SearchableSelect Options="@AreasGeoDisponiveis" @bind-Value="AreaGeoSelecionada" Placeholder="Área (Todas)" />
+                </div>
+
+                <details>
+                    <summary style="cursor: pointer; color: var(--accent-red); font-weight: 600;">Mais filtros do cadastro e da eleição</summary>
+                    <div class="filter-grid-secondary" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.65rem;">
+                        <SearchableSelect Options="@CadastrosDisponiveis" @bind-Value="CadastroSelecionado" Placeholder="Cadastro (Todos)" />
+                        <SearchableSelect Options="@FederacoesDisponiveis" @bind-Value="FederacaoSelecionada" Placeholder="Federação (Todas)" />
+                        <SearchableSelect Options="@ConfederacoesDisponiveis" @bind-Value="ConfederacaoSelecionada" Placeholder="Confederação (Todas)" />
+                        <SearchableSelect Options="@FuncionamentosDirecaoDisponiveis" @bind-Value="FuncionamentoDirecaoSelecionado" Placeholder="Funcionamento da direção (Todos)" />
+                        <SearchableSelect Options="@FormasEleicaoDisponiveis" @bind-Value="FormaEleicaoSelecionada" Placeholder="Forma de eleição (Todas)" />
+                    </div>
+                </details>
+
+                <!-- Linha 2 de Filtros: Grupo, Classe, Categoria e Central Sindical -->
+                <div class="filter-grid-tertiary" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem;">
+                    <SearchableSelect Options="@GruposDisponiveis" @bind-Value="GrupoSelecionado" Placeholder="Grupo (Todos)" />
+                    <SearchableSelect Options="@ClassesDisponiveis" @bind-Value="ClasseSelecionada" Placeholder="Classe (Todas)" />
+                    <SearchableSelect Options="@CategoriasDisponiveis" @bind-Value="CategoriaSelecionada" Placeholder="Categoria (Todas)" />
+                    <SearchableSelect Options="@CentraisDisponiveis" @bind-Value="CentralSelecionada" Placeholder="Central Sindical (Todas)" />
+                </div>
+
+                <!-- Rodapé dos Filtros: Checkbox Mandato + Contagem + Limpar -->
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-secondary); padding-top: 4px;">
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="checkbox" @bind="ApenasMandatoVigente" style="accent-color: var(--accent-red);" />
+                        <span>Apenas Mandato Vigente</span>
+                    </label>
+
+                    <div>
+                        <span>Encontrados: <strong style="color: var(--accent-red);">@sindicatosFiltrados.Count</strong></span>
+                        <button style="background:none; border:none; color: var(--accent-red); cursor:pointer; font-weight:600; margin-left: 10px; text-decoration: underline;"
+                                @onclick="LimparTodosFiltros">
+                            Limpar filtros
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LISTA ROLÁVEL DE SINDICATOS -->
+            <div class="results-list" style="flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                @if (sindicatosFiltrados.Count == 0)
+                {
+                    <div style="text-align: center; padding: 3rem 1rem; color: var(--text-secondary);">
+                        Nenhuma entidade sindical encontrada com estes filtros.
+                    </div>
+                }
+                else
+                {
+                    <Virtualize Items="@sindicatosFiltrados" Context="sind">
+                        <div class="sindicato-card" style="cursor: pointer;" @onclick="() => AbrirDetalhes(sind)">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <span class="badge-red">@sind.Grau</span>
+                                    <span style="font-size: 0.75rem; color: var(--text-secondary);">Cadastro: @Exibir(sind.Cadastro)</span>
+                                    <span style="font-size: 0.75rem; color: var(--text-secondary); font-family: monospace;">
+                                        Cód: @(string.IsNullOrEmpty(sind.CodigoSindicalCompleto) ? "N/I" : sind.CodigoSindicalCompleto)
+                                    </span>
+                                </div>
+                                <span class="badge-red">@sind.UfSede</span>
+                            </div>
+
+                            <h3 style="font-size: 0.92rem; font-weight: 700; margin: 0.45rem 0; line-height: 1.35;">
+                                @sind.Denominacao
+                            </h3>
+
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; font-size: 0.72rem; color: var(--text-secondary);">
+                                @if (!string.IsNullOrEmpty(sind.Grupo))
+                                {
+                                    <span style="border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">@sind.Grupo</span>
+                                }
+                                @if (!string.IsNullOrEmpty(sind.Classe))
+                                {
+                                    <span style="border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">@sind.Classe</span>
+                                }
+                                @if (!string.IsNullOrEmpty(sind.AreaGeoeconomica))
+                                {
+                                    <span style="border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">@sind.AreaGeoeconomica</span>
+                                }
+                                @if (!string.IsNullOrEmpty(sind.Categoria))
+                                {
+                                    <span style="border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">@sind.Categoria</span>
+                                }
+                                @if (!string.IsNullOrEmpty(sind.CentralSindical))
+                                {
+                                    <span style="border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">Central: @sind.CentralSindical</span>
+                                }
+                            </div>
+
+                            <div style="margin-top: 0.65rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-secondary);">
+                                <span>📍 @Exibir(sind.EnderecoFormatado)</span>
+                                <span>CNPJ: <strong>@sind.Cnpj</strong></span>
+                                <span style="color: @(sind.MandatoVigente ? "#10b981" : "var(--accent-red)"); font-weight: 700;">
+                                    ● Mandato @sind.StatusMandato
+                                </span>
+                            </div>
+                        </div>
+                    </Virtualize>
+                }
+            </div>
+        </aside>
+    </main>
+
+    @if (SindicatoSelecionado is not null)
+    {
+        <div class="profile-page">
+            <header class="profile-header">
+                <button class="btn-outline-red" @onclick="FecharDetalhes">← Voltar à lista</button>
+                <span class="profile-header-title">Perfil da entidade sindical</span>
+                <button class="btn-red" @onclick="FecharDetalhes">Fechar</button>
+            </header>
+
+            <main class="profile-content">
+                <section class="profile-identity">
+                    <div class="profile-badges">
+                        <span class="badge-red">@Exibir(SindicatoSelecionado.Grau)</span>
+                        <span class="profile-muted">Cadastro: @Exibir(SindicatoSelecionado.Cadastro)</span>
+                        <span class="profile-muted">CNPJ @Exibir(SindicatoSelecionado.Cnpj)</span>
+                    </div>
+                    <h1>@Exibir(SindicatoSelecionado.Denominacao)</h1>
+                    <p>Código sindical: @Exibir(SindicatoSelecionado.CodigoSindicalCompleto)</p>
+                </section>
+
+                <section class="profile-contact">
+                    <h2>Endereço e contato</h2>
+                    <p class="profile-address">@Exibir(SindicatoSelecionado.EnderecoFormatado)</p>
+                    @if (!string.IsNullOrWhiteSpace(DetalhesEndereco(SindicatoSelecionado)))
+                    {
+                        <p class="profile-address-parts">@DetalhesEndereco(SindicatoSelecionado)</p>
+                    }
+                    <div class="profile-contact-links">
+                        @if (!string.IsNullOrWhiteSpace(SindicatoSelecionado.Telefone1))
+                        {
+                            <a class="profile-contact-link" href="@($"tel:{TelefoneLink(SindicatoSelecionado.Telefone1)}")">
+                                <span>Telefone</span>
+                                <strong>@SindicatoSelecionado.Telefone1</strong>
+                            </a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SindicatoSelecionado.Email))
+                        {
+                            <a class="profile-contact-link" href="@($"mailto:{SindicatoSelecionado.Email}")">
+                                <span>E-mail</span>
+                                <strong>@SindicatoSelecionado.Email</strong>
+                            </a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SindicatoSelecionado.EnderecoFormatado))
+                        {
+                            <a class="profile-map-link"
+                               href="@($"https://www.google.com/maps/search/?api=1&query={Uri.EscapeDataString(SindicatoSelecionado.EnderecoFormatado)}")"
+                               target="_blank"
+                               rel="noopener noreferrer">
+                                Ver endereço no mapa ↗
+                            </a>
+                        }
+                    </div>
+                </section>
+
+                <section class="profile-section">
+                    <h2>Informações cadastrais</h2>
+                    <dl class="profile-details">
+                        <div><dt>Identificador</dt><dd>@SindicatoSelecionado.Id</dd></div>
+                        <div><dt>Federação</dt><dd>@Exibir(SindicatoSelecionado.Federacao)</dd></div>
+                        <div><dt>Confederação</dt><dd>@Exibir(SindicatoSelecionado.Confederacao)</dd></div>
+                        <div><dt>Central sindical</dt><dd>@Exibir(SindicatoSelecionado.CentralSindical)</dd></div>
+                        <div><dt>Área geoeconômica</dt><dd>@Exibir(SindicatoSelecionado.AreaGeoeconomica)</dd></div>
+                        <div><dt>Grupo</dt><dd>@Exibir(SindicatoSelecionado.Grupo)</dd></div>
+                        <div><dt>Classe</dt><dd>@Exibir(SindicatoSelecionado.Classe)</dd></div>
+                        <div><dt>Categoria</dt><dd>@Exibir(SindicatoSelecionado.Categoria)</dd></div>
+                    </dl>
+                </section>
+
+                <section class="profile-section">
+                    <h2>Direção e processo eleitoral</h2>
+                    <dl class="profile-details">
+                        <div><dt>Presidente</dt><dd>@Exibir(SindicatoSelecionado.NomePresidente)</dd></div>
+                        <div><dt>Funcionamento da direção</dt><dd>@Exibir(SindicatoSelecionado.FuncionamentoDirecao)</dd></div>
+                        <div><dt>Início do mandato</dt><dd>@(SindicatoSelecionado.InicioMandato?.ToString("dd/MM/yyyy") ?? "N/I")</dd></div>
+                        <div><dt>Fim do mandato</dt><dd>@(SindicatoSelecionado.FimMandato?.ToString("dd/MM/yyyy") ?? "N/I")</dd></div>
+                        <div><dt>Status do mandato</dt><dd>@SindicatoSelecionado.StatusMandato</dd></div>
+                        <div><dt>Dirigentes eleitos</dt><dd>@(SindicatoSelecionado.NumeroTotalDirigentesEleitos?.ToString() ?? "N/I")</dd></div>
+                        <div><dt>Forma de eleição</dt><dd>@Exibir(SindicatoSelecionado.FormaEleicao)</dd></div>
+                        <div><dt>Número de chapas</dt><dd>@(SindicatoSelecionado.NumeroChapas?.ToString() ?? "N/I")</dd></div>
+                        <div><dt>Colégio eleitoral</dt><dd>@(SindicatoSelecionado.ColegioEleitoral?.ToString() ?? "N/I")</dd></div>
+                        <div><dt>Total de votantes</dt><dd>@(SindicatoSelecionado.TotalVotantes?.ToString() ?? "N/I")</dd></div>
+                        <div><dt>Votos da chapa vencedora</dt><dd>@(SindicatoSelecionado.NumeroVotosChapaVencedora?.ToString() ?? "N/I")</dd></div>
+                        <div><dt>Participação eleitoral</dt><dd>@(SindicatoSelecionado.TaxaParticipacaoEleitoral?.ToString("0.0") ?? "N/I")%</dd></div>
+                    </dl>
+                </section>
+            </main>
+        </div>
+    }
+</div>
+
+@code {
+    private DotNetObjectReference<MapaSindicatos>? _objRef;
+    private bool ModoEscuro = true;
+
+    // Estados dos Filtros
+    private string TermoBusca = "";
+    private string UfSelecionada = "";
+    private string GrauSelecionado = "";
+    private string AreaGeoSelecionada = "";
+    private string GrupoSelecionado = "";
+    private string ClasseSelecionada = "";
+    private string CategoriaSelecionada = "";
+    private string CentralSelecionada = "";
+    private string CadastroSelecionado = "";
+    private string FederacaoSelecionada = "";
+    private string ConfederacaoSelecionada = "";
+    private string FuncionamentoDirecaoSelecionado = "";
+    private string FormaEleicaoSelecionada = "";
+    private bool ApenasMandatoVigente = false;
+    private bool FiltrosVisiveis = true;
+
+    // Modal
+    private Sindicato? SindicatoSelecionado = null;
+
+    // Listas para os Dropdowns
+    private List<string> GrausDisponiveis = [];
+    private List<string> CadastrosDisponiveis = [];
+    private List<string> AreasGeoDisponiveis = [];
+    private List<string> GruposDisponiveis = [];
+    private List<string> ClassesDisponiveis = [];
+    private List<string> CategoriasDisponiveis = [];
+    private List<string> CentraisDisponiveis = [];
+    private List<string> FederacoesDisponiveis = [];
+    private List<string> ConfederacoesDisponiveis = [];
+    private List<string> FuncionamentosDirecaoDisponiveis = [];
+    private List<string> FormasEleicaoDisponiveis = [];
+    private List<string> UfsDisponiveis = [];
+
+    private List<Sindicato> SindicatosFiltrados =>
+        SindicatoService.Filtrar(
+            busca: TermoBusca,
+            uf: UfSelecionada,
+            grau: GrauSelecionado,
+            areaGeoeconomica: AreaGeoSelecionada,
+            grupo: GrupoSelecionado,
+            classe: ClasseSelecionada,
+            categoria: CategoriaSelecionada,
+            centralSindical: CentralSelecionada,
+            cadastro: CadastroSelecionado,
+            federacao: FederacaoSelecionada,
+            confederacao: ConfederacaoSelecionada,
+            funcionamentoDirecao: FuncionamentoDirecaoSelecionado,
+            formaEleicao: FormaEleicaoSelecionada,
+            apenasMandatoVigente: ApenasMandatoVigente
+        ).ToList();
+
+    protected override void OnInitialized()
+    {
+        GrausDisponiveis = SindicatoService.ObterGraus();
+        CadastrosDisponiveis = SindicatoService.ObterCadastros();
+        AreasGeoDisponiveis = SindicatoService.ObterAreasGeoeconomicas();
+        GruposDisponiveis = SindicatoService.ObterGrupos();
+        ClassesDisponiveis = SindicatoService.ObterClasses();
+        CategoriasDisponiveis = SindicatoService.ObterCategorias();
+        CentraisDisponiveis = SindicatoService.ObterCentraisSindicais();
+        FederacoesDisponiveis = SindicatoService.ObterFederacoes();
+        ConfederacoesDisponiveis = SindicatoService.ObterConfederacoes();
+        FuncionamentosDirecaoDisponiveis = SindicatoService.ObterFuncionamentosDirecao();
+        FormasEleicaoDisponiveis = SindicatoService.ObterFormasEleicao();
+        UfsDisponiveis = SindicatoService.ObterUfs();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _objRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync(
+                "cnesMapa.init",
+                "blazorMap",
+                _objRef,
+                ModoEscuro,
+                SindicatoService.ObterContagemPorUf());
+        }
+    }
+
+    [JSInvokable]
+    public void OnEstadoClicadoNoMapa(string uf)
+    {
+        UfSelecionada = uf;
+        StateHasChanged();
+    }
+
+    private async Task OnUfDropdownChanged(string uf)
+    {
+        UfSelecionada = uf;
+        await JS.InvokeVoidAsync("cnesMapa.selectUfFromBlazor", UfSelecionada);
+    }
+
+    private async Task LimparEstado()
+    {
+        UfSelecionada = "";
+        await JS.InvokeVoidAsync("cnesMapa.selectUfFromBlazor", "");
+    }
+
+    private async Task LimparTodosFiltros()
+    {
+        TermoBusca = "";
+        GrauSelecionado = "";
+        AreaGeoSelecionada = "";
+        GrupoSelecionado = "";
+        ClasseSelecionada = "";
+        CategoriaSelecionada = "";
+        CentralSelecionada = "";
+        CadastroSelecionado = "";
+        FederacaoSelecionada = "";
+        ConfederacaoSelecionada = "";
+        FuncionamentoDirecaoSelecionado = "";
+        FormaEleicaoSelecionada = "";
+        ApenasMandatoVigente = false;
+        await LimparEstado();
+    }
+
+    private void AbrirDetalhes(Sindicato sind) => SindicatoSelecionado = sind;
+    private void FecharDetalhes() => SindicatoSelecionado = null;
+    private void AlternarVisibilidadeFiltros() => FiltrosVisiveis = !FiltrosVisiveis;
+    private static string Exibir(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? "N/I" : valor;
+    private static string TelefoneLink(string telefone) =>
+        new(telefone.Where(char.IsDigit).ToArray());
+    private static string DetalhesEndereco(Sindicato sindicato) =>
+        string.Join(" · ", new[]
+        {
+            sindicato.Logradouro,
+            sindicato.Numero,
+            sindicato.Complemento,
+            sindicato.Bairro,
+            sindicato.Cep,
+            sindicato.LocalidadeSede,
+            sindicato.UfSede
+        }.Where(parte => !string.IsNullOrWhiteSpace(parte)));
+
+    private async Task AlternarTema()
+    {
+        ModoEscuro = !ModoEscuro;
+        await JS.InvokeVoidAsync("cnesMapa.setTheme", ModoEscuro);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _objRef?.Dispose();
+        await Task.CompletedTask;
+    }
+}

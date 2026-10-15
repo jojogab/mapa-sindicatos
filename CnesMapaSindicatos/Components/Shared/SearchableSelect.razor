@@ -1,0 +1,138 @@
+<div class="searchable-select @(_isOpen ? "open" : null)">
+    <input type="text"
+           class="input-control searchable-select-input"
+           role="combobox"
+           aria-autocomplete="list"
+           aria-expanded="@_isOpen.ToString().ToLowerInvariant()"
+           placeholder="@Placeholder"
+           value="@_search"
+           @onfocus="OpenOptions"
+           @onblur="CloseOptions"
+           @oninput="OnInput"
+           @onkeydown="OnKeyDown"
+           autocomplete="off" />
+
+    @if (!string.IsNullOrEmpty(Value))
+    {
+        <button type="button"
+                class="searchable-select-clear"
+                aria-label="Limpar filtro"
+                @onmousedown:preventDefault="true"
+                @onclick="Clear">
+            ×
+        </button>
+    }
+
+    @if (_isOpen)
+    {
+        <div class="searchable-select-options" role="listbox">
+            @if (FilteredOptions.Count == 0)
+            {
+                <div class="searchable-select-empty">Nenhuma opção encontrada</div>
+            }
+            else
+            {
+                @foreach (var option in FilteredOptions.Take(MaxVisibleOptions))
+                {
+                    <button type="button"
+                            class="searchable-select-option @(option == Value ? "selected" : null)"
+                            role="option"
+                            aria-selected="@(option == Value)"
+                            @onmousedown:preventDefault="true"
+                            @onclick="() => SelectOption(option)">
+                        @option
+                    </button>
+                }
+                @if (FilteredOptions.Count > MaxVisibleOptions)
+                {
+                    <div class="searchable-select-empty">
+                        Exibindo @MaxVisibleOptions de @FilteredOptions.Count opções. Digite para refinar.
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private const int MaxVisibleOptions = 100;
+    private bool _isOpen;
+    private string _search = string.Empty;
+    private string _observedValue = string.Empty;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<string> Options { get; set; } = [];
+
+    [Parameter]
+    public string Value { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter, EditorRequired]
+    public string Placeholder { get; set; } = string.Empty;
+
+    private List<string> FilteredOptions =>
+        Options.Where(option => option.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Take(MaxVisibleOptions + 1)
+            .ToList();
+
+    protected override void OnParametersSet()
+    {
+        if (!string.Equals(Value, _observedValue, StringComparison.Ordinal))
+        {
+            _observedValue = Value;
+            _search = Value;
+            _isOpen = false;
+        }
+    }
+
+    private void OpenOptions()
+    {
+        if (!_isOpen)
+        {
+            _search = string.Empty;
+            _isOpen = true;
+        }
+    }
+
+    private void OnInput(ChangeEventArgs args)
+    {
+        _search = args.Value?.ToString() ?? string.Empty;
+        _isOpen = true;
+    }
+
+    private void CloseOptions()
+    {
+        _search = Value;
+        _isOpen = false;
+    }
+
+    private async Task SelectOption(string option)
+    {
+        _search = option;
+        _observedValue = option;
+        _isOpen = false;
+        await ValueChanged.InvokeAsync(option);
+    }
+
+    private async Task Clear()
+    {
+        _search = string.Empty;
+        _observedValue = string.Empty;
+        _isOpen = false;
+        await ValueChanged.InvokeAsync(string.Empty);
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            CloseOptions();
+        }
+        else if (args.Key == "Enter" && _isOpen && FilteredOptions.Count > 0)
+        {
+            await SelectOption(FilteredOptions[0]);
+        }
+    }
+}
